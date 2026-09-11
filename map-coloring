@@ -1,0 +1,763 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>실제 세계지도 4색정리 - 완벽 작동 초기화</title>
+  
+  <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+  <script src="https://cdn.jsdelivr.net/npm/topojson-client@3"></script>
+
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif;
+      background: #0b192c;
+      color: #f8fafc;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    header {
+      width: 100%;
+      background: #1e293b;
+      padding: 8px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      z-index: 30;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.4);
+    }
+    .top-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    h1 { font-size: 1.05rem; font-weight: 800; }
+    .status-pill {
+      font-size: 0.7rem;
+      background: #0f172a;
+      color: #38bdf8;
+      padding: 3px 8px;
+      border-radius: 999px;
+      border: 1px solid #334155;
+    }
+
+    .dashboard {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 6px;
+      background: #0f172a;
+      padding: 6px 8px;
+      border-radius: 8px;
+      text-align: center;
+    }
+    .stat-title { font-size: 0.65rem; color: #94a3b8; }
+    .stat-val { font-size: 1.05rem; font-weight: 800; }
+    .stat-val.cyan { color: #38bdf8; }
+    .stat-val.red { color: #f87171; }
+
+    .palette-container {
+      width: 100%;
+      overflow-x: auto;
+      padding: 4px 0;
+      -webkit-overflow-scrolling: touch;
+    }
+    .palette-list {
+      display: inline-flex;
+      gap: 8px;
+      padding: 0 4px;
+    }
+    .color-btn {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      border: 2px solid #334155;
+      cursor: pointer;
+      flex-shrink: 0;
+      transition: transform 0.1s, border-color 0.1s;
+    }
+    .color-btn.active {
+      transform: scale(1.18);
+      border-color: #ffffff;
+    }
+    .eraser-btn {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: #334155;
+      border: 2px dashed #94a3b8;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.85rem;
+      cursor: pointer;
+      color: white;
+      flex-shrink: 0;
+    }
+    .eraser-btn.active {
+      border: 2px solid white;
+      background: #475569;
+      transform: scale(1.18);
+    }
+
+    #mapViewport {
+      flex: 1;
+      width: 100%;
+      position: relative;
+      background: #193549;
+      overflow: hidden;
+      cursor: grab;
+    }
+    #mapViewport:active { cursor: grabbing; }
+    #mapSvg { width: 100%; height: 100%; display: block; }
+
+    #labelOverlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      overflow: hidden;
+    }
+
+    .hud-label {
+      position: absolute;
+      transform: translate(-50%, -50%);
+      font-size: 10px;
+      font-weight: 700;
+      color: #ffffff;
+      background: rgba(15, 23, 42, 0.82);
+      padding: 1.5px 6px;
+      border-radius: 4px;
+      border: 1px solid rgba(255, 255, 255, 0.3);
+      white-space: nowrap;
+      text-shadow: 0 1px 2px rgba(0,0,0,0.8);
+      pointer-events: none;
+      box-shadow: 0 2px 5px rgba(0,0,0,0.4);
+      transition: opacity 0.15s ease;
+      line-height: 1.2;
+    }
+    .hud-label.micro {
+      font-size: 9px;
+      padding: 1px 4px;
+      background: rgba(15, 23, 42, 0.9);
+      border-color: #38bdf8;
+    }
+
+    path.country {
+      fill: #e2e8f0;
+      stroke: #475569;
+      stroke-width: 0.5px;
+      transition: fill 0.08s ease;
+      cursor: pointer;
+    }
+    path.country.conflict {
+      stroke: #ef4444 !important;
+      stroke-width: 2.2px !important;
+      stroke-dasharray: 4, 3;
+    }
+
+    @keyframes pulseGlow {
+      0% { fill: #facc15; stroke: #ffffff; stroke-width: 3px; }
+      50% { fill: #ca8a04; stroke: #facc15; stroke-width: 4px; }
+      100% { fill: #facc15; stroke: #ffffff; stroke-width: 3px; }
+    }
+    path.country.highlighted {
+      animation: pulseGlow 0.6s infinite alternate;
+    }
+
+    .map-controls {
+      position: absolute;
+      right: 12px;
+      bottom: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+      z-index: 50; /* 💡 터치 가로챔 완벽 방지 */
+      pointer-events: auto;
+    }
+    .ctrl-btn {
+      width: 42px;
+      height: 42px;
+      border-radius: 12px;
+      background: rgba(15, 23, 42, 0.9);
+      border: 1px solid #475569;
+      color: white;
+      font-size: 1.15rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      backdrop-filter: blur(4px);
+      cursor: pointer;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+      transition: background 0.15s, opacity 0.15s, transform 0.1s;
+      touch-action: manipulation;
+    }
+    .ctrl-btn:active { background: #334155; transform: scale(0.95); }
+    .ctrl-btn:disabled {
+      opacity: 0.35;
+      cursor: not-allowed;
+      background: rgba(15, 23, 42, 0.5);
+    }
+    .ctrl-btn.nav-btn {
+      background: #0284c7;
+      border-color: #38bdf8;
+    }
+    .ctrl-btn.undo-btn {
+      background: #475569;
+      border-color: #94a3b8;
+    }
+    .ctrl-btn.clear-btn {
+      background: #dc2626;
+      border-color: #f87171;
+      font-size: 1.05rem;
+    }
+
+    #statusToast {
+      position: absolute;
+      left: 12px;
+      bottom: 16px;
+      background: rgba(15, 23, 42, 0.92);
+      border: 1px solid #334155;
+      padding: 8px 12px;
+      border-radius: 8px;
+      font-size: 0.78rem;
+      max-width: 65%;
+      backdrop-filter: blur(4px);
+      line-height: 1.35;
+      z-index: 25;
+    }
+
+    .loading-overlay {
+      position: absolute;
+      top: 0; left: 0; width: 100%; height: 100%;
+      background: #0b192c;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.9rem;
+      z-index: 100;
+      color: #38bdf8;
+      transition: opacity 0.2s ease;
+    }
+  </style>
+</head>
+<body>
+
+  <div id="loadingOverlay" class="loading-overlay">
+    <div>지도 준비 중...</div>
+  </div>
+
+  <header>
+    <div class="top-row">
+      <h1>🌍 실제 세계지도 4색정리</h1>
+      <span class="status-pill" id="zoomBadge">확대: 1.0x</span>
+    </div>
+
+    <div class="dashboard">
+      <div class="stat-box">
+        <div class="stat-title">사용한 색</div>
+        <div class="stat-val cyan" id="usedCount">0개</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-title">칠한 국가</div>
+        <div class="stat-val" id="coloredCount">0 / -</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-title">국경 충돌</div>
+        <div class="stat-val red" id="conflictCount">0건</div>
+      </div>
+    </div>
+
+    <div class="palette-container">
+      <div class="palette-list" id="paletteList"></div>
+    </div>
+  </header>
+
+  <div id="mapViewport">
+    <svg id="mapSvg">
+      <g id="mainContainer">
+        <g id="countriesLayer"></g>
+      </g>
+    </svg>
+
+    <div id="labelOverlay"></div>
+
+    <div class="map-controls">
+      <!-- ↩ 되돌리기 (초기화 후에도 복구 가능) -->
+      <button class="ctrl-btn undo-btn" id="undoBtn" title="되돌리기" disabled>↩</button>
+      <!-- 🎯 남은 국가 찾기 -->
+      <button class="ctrl-btn nav-btn" id="findNextBtn" title="남은 국가 찾기">🎯</button>
+      <!-- ＋ 줌인 -->
+      <button class="ctrl-btn" id="zoomInBtn" title="확대">＋</button>
+      <!-- － 줌아웃 -->
+      <button class="ctrl-btn" id="zoomOutBtn" title="축소">－</button>
+      <!-- 🌐 화면 중앙 원위치 -->
+      <button class="ctrl-btn" id="zoomResetBtn" title="화면 원래대로 맞춤">🌐</button>
+      <!-- 🗑️ 즉시 색칠 초기화 -->
+      <button class="ctrl-btn clear-btn" id="clearAllColorsBtn" title="색칠 즉시 초기화">🗑️</button>
+    </div>
+
+    <div id="statusToast">나라를 터치해 색칠해보세요!</div>
+  </div>
+
+  <script>
+    const VALID_COUNTRIES = {
+      4: "아프가니스탄", 8: "알바니아", 12: "알제리", 24: "앙골라", 32: "아르헨티나", 
+      36: "호주", 40: "오스트리아", 31: "아제르바이잔", 50: "방글라데시", 56: "벨기에", 
+      204: "베냉", 64: "부탄", 68: "볼리비아", 70: "보스니아", 72: "보츠와나", 
+      76: "브라질", 96: "브루나이", 100: "불가리아", 854: "부르키나파소", 108: "부룬디", 
+      116: "캄보디아", 120: "카메룬", 124: "캐나다", 140: "중앙아프리카", 148: "차드", 
+      152: "칠레", 156: "중국", 170: "콜롬비아", 178: "콩고", 180: "콩고민주공화국", 
+      188: "코스타리카", 384: "코트디부아르", 191: "크로아티아", 192: "쿠바", 196: "키프로스", 
+      203: "체코", 208: "덴마크", 262: "지부티", 214: "도미니카", 218: "에콰도르", 
+      818: "이집트", 222: "엘살바도르", 226: "적도기니", 232: "에리트레아", 233: "에스토니아", 
+      231: "에티오피아", 242: "피지", 246: "핀란드", 250: "프랑스", 266: "가봉", 
+      270: "감비아", 268: "조지아", 276: "독일", 288: "가나", 300: "그리스", 
+      304: "그린란드", 320: "과테말라", 324: "기니", 624: "기니비사우", 328: "가이아나", 
+      332: "아이티", 340: "온두라스", 348: "헝가리", 352: "아이슬란드", 356: "인도", 
+      360: "인도네시아", 364: "이란", 368: "이라크", 372: "아일랜드", 376: "이스라엘", 
+      380: "이탈리아", 388: "자메이카", 392: "일본", 400: "요르단", 398: "카자흐스탄", 
+      404: "케냐", 408: "북한", 410: "대한민국", 414: "쿠웨이트", 417: "키르기스스탄", 
+      418: "라오스", 428: "라트비아", 422: "레바논", 426: "레소토", 430: "라이베리아", 
+      434: "리비아", 440: "리투아니아", 442: "룩셈부르크", 807: "북마케도니아", 450: "마다가스카르", 
+      454: "말라위", 458: "말레이시아", 466: "말리", 478: "모리타니", 484: "멕시코", 
+      498: "몰도바", 496: "몽골", 499: "몬테네그로", 504: "모로코", 508: "모잠비크", 
+      104: "미얀마", 516: "나미비아", 524: "네팔", 528: "네덜란드", 554: "뉴질랜드", 
+      558: "니카라과", 562: "니제르", 566: "나이지리아", 578: "노르웨이", 512: "오만", 
+      586: "파키스탄", 591: "파나마", 598: "파푸아뉴기니", 600: "파라과이", 604: "페루", 
+      608: "필리핀", 616: "폴란드", 620: "포르투갈", 634: "카타르", 642: "루마니아", 
+      643: "러시아", 646: "르완다", 682: "사우디", 686: "세네갈", 688: "세르비아", 
+      694: "시에라리온", 703: "슬로바키아", 705: "슬로베니아", 706: "소말리아", 710: "남아공", 
+      728: "남수단", 724: "스페인", 144: "스리랑카", 729: "수단", 740: "수리남", 
+      748: "에스와티니", 752: "스웨덴", 756: "스위스", 760: "시리아", 158: "대만", 
+      762: "타지키스탄", 764: "태국", 768: "토고", 780: "트리니다드토바고", 788: "튀니지", 
+      792: "튀르키예", 795: "투르크메니스탄", 800: "우간다", 804: "우크라이나", 784: "아랍에미리트", 
+      826: "영국", 840: "미국", 858: "우루과이", 860: "우즈베키스탄", 862: "베네수엘라", 
+      704: "베트남", 732: "서사하라", 887: "예멘", 894: "잠비아", 716: "짐바브웨"
+    };
+
+    const CUSTOM_CENTROIDS = {
+      250: [2.3, 46.6],    // 프랑스
+      724: [-3.7, 40.2],   // 스페인
+      620: [-8.2, 39.5],   // 포르투갈
+      840: [-98.5, 39.5],  // 미국
+      578: [8.5, 61.0],    // 노르웨이
+      458: [102.0, 4.0],   // 말레이시아
+      191: [16.5, 45.2],   // 크로아티아
+      70:  [17.8, 44.0],   // 보스니아
+      688: [20.8, 44.0],   // 세르비아
+      499: [19.2, 42.8],   // 몬테네그로
+      8:   [20.0, 41.2],   // 알바니아
+      807: [21.7, 41.6],   // 북마케도니아
+      705: [14.8, 46.1],   // 슬로베니아
+      756: [8.2, 46.8],    // 스위스
+      56:  [4.5, 50.6],    // 벨기에
+      528: [5.3, 52.2]     // 네덜란드
+    };
+
+    const PALETTE_COLORS = [
+      '#ef4444', '#f97316', '#f59e0b', '#84cc16', 
+      '#10b981', '#06b6d4', '#3b82f6', '#6366f1', 
+      '#a855f7', '#ec4899', '#f43f5e', '#64748b'
+    ];
+
+    let activeColor = PALETTE_COLORS[0];
+    let isEraser = false;
+
+    let countryColors = {};
+    const adjacencyGraph = {};
+    let allCountriesData = [];
+    let historyStack = [];
+
+    const width = 960;
+    const height = 500;
+    const projection = d3.geoNaturalEarth1()
+      .scale(155)
+      .translate([width / 2, height / 2]);
+    const pathGenerator = d3.geoPath().projection(projection);
+
+    const svg = d3.select("#mapSvg");
+    const container = d3.select("#mainContainer");
+    const labelOverlay = document.getElementById("labelOverlay");
+
+    let currentTransform = d3.zoomIdentity;
+    let initialCenteredTransform = d3.zoomIdentity;
+
+    function updateLabels(transform) {
+      const k = transform.k;
+      const vRect = document.getElementById("mapViewport").getBoundingClientRect();
+      const placedBoxes = [];
+
+      allCountriesData.forEach(feat => {
+        const el = feat.labelEl;
+        if (!el || !feat.mapCentroid) return;
+
+        const screenX = transform.applyX(feat.mapCentroid[0]);
+        const screenY = transform.applyY(feat.mapCentroid[1]);
+
+        if (screenX < -30 || screenX > vRect.width + 30 || screenY < -30 || screenY > vRect.height + 30) {
+          el.style.display = "none";
+          return;
+        }
+
+        let rankAllowed = false;
+        if (k >= 2.6) {
+          rankAllowed = true;
+        } else if (k >= 1.6) {
+          rankAllowed = (feat.labelRank <= 2);
+        } else {
+          rankAllowed = (feat.labelRank === 1);
+        }
+
+        if (!rankAllowed) {
+          el.style.display = "none";
+          return;
+        }
+
+        const textLen = feat.properties.name.length;
+        const boxW = textLen * 9.5 + 14;
+        const boxH = 20;
+        const left = screenX - boxW / 2;
+        const top = screenY - boxH / 2;
+        const right = screenX + boxW / 2;
+        const bottom = screenY + boxH / 2;
+
+        let hasCollision = false;
+        for (const b of placedBoxes) {
+          if (!(right < b.left || left > b.right || bottom < b.top || top > b.bottom)) {
+            hasCollision = true;
+            break;
+          }
+        }
+
+        if (!hasCollision) {
+          placedBoxes.push({ left, top, right, bottom });
+          el.style.display = "block";
+          el.style.left = `${screenX}px`;
+          el.style.top = `${screenY}px`;
+        } else {
+          el.style.display = "none";
+        }
+      });
+    }
+
+    const zoomBehavior = d3.zoom()
+      .scaleExtent([0.8, 25])
+      .on("zoom", (event) => {
+        currentTransform = event.transform;
+        container.attr("transform", currentTransform);
+        updateLabels(currentTransform);
+        document.getElementById("zoomBadge").textContent = `확대: ${currentTransform.k.toFixed(1)}x`;
+      });
+
+    svg.call(zoomBehavior);
+
+    document.getElementById("zoomInBtn").onclick = (e) => {
+      e.stopPropagation();
+      svg.transition().duration(200).call(zoomBehavior.scaleBy, 1.45);
+    };
+    document.getElementById("zoomOutBtn").onclick = (e) => {
+      e.stopPropagation();
+      svg.transition().duration(200).call(zoomBehavior.scaleBy, 0.7);
+    };
+
+    // 🌐 화면 초기화
+    document.getElementById("zoomResetBtn").onclick = (e) => {
+      e.stopPropagation();
+      svg.transition().duration(350).call(zoomBehavior.transform, initialCenteredTransform);
+      document.getElementById("statusToast").innerHTML = `🌐 화면을 중앙 위치로 맞췄습니다.`;
+    };
+
+    // ==========================================================
+    // 💡 [수정] 🗑️ 색칠 즉시 초기화 (히스토리 보존 + 취소 복구 지원)
+    // ==========================================================
+    document.getElementById("clearAllColorsBtn").onclick = (e) => {
+      e.stopPropagation();
+      
+      // 현재 칠해져 있던 모든 색상 스냅샷 저장
+      const snapshot = {};
+      let hasColored = false;
+      for (const id in countryColors) {
+        if (countryColors[id]) {
+          snapshot[id] = countryColors[id];
+          hasColored = true;
+        }
+      }
+
+      if (!hasColored) {
+        document.getElementById("statusToast").innerHTML = `지울 국가가 없습니다.`;
+        return;
+      }
+
+      // '전체 초기화' 자체를 히스토리에 기록 (실수로 눌러도 되돌리기 가능)
+      historyStack.push({
+        type: "CLEAR_ALL",
+        prevSnapshot: snapshot
+      });
+      updateUndoButtonState();
+
+      // 전체 색상 리셋
+      for (const id in countryColors) {
+        countryColors[id] = null;
+      }
+
+      d3.selectAll("path.country")
+        .style("fill", "#e2e8f0")
+        .classed("conflict", false)
+        .classed("highlighted", false);
+
+      checkValidity();
+      document.getElementById("statusToast").innerHTML = `🗑️ 색칠이 초기화되었습니다! (실수했다면 ↩로 복구 가능)`;
+    };
+
+    // ==========================================================
+    // 💡 [수정] ↩️ 실행 취소 (단일 국가 및 전체 초기화 둘 다 복구)
+    // ==========================================================
+    function updateUndoButtonState() {
+      document.getElementById("undoBtn").disabled = (historyStack.length === 0);
+    }
+
+    document.getElementById("undoBtn").onclick = (e) => {
+      e.stopPropagation();
+      if (historyStack.length === 0) return;
+
+      const lastAction = historyStack.pop();
+
+      if (lastAction.type === "CLEAR_ALL") {
+        // 전체 초기화 직전의 모든 색상 일괄 복원
+        for (const [id, color] of Object.entries(lastAction.prevSnapshot)) {
+          countryColors[id] = color;
+          d3.select(`#country-${id}`).style("fill", color);
+        }
+        document.getElementById("statusToast").innerHTML = `↩️ 초기화 전 상태로 복구했습니다!`;
+      } else {
+        // 일반 단일 국가 색칠 되돌리기
+        const id = lastAction.id;
+        countryColors[id] = lastAction.prevColor;
+        d3.select(`#country-${id}`).style("fill", countryColors[id] || "#e2e8f0");
+        document.getElementById("statusToast").innerHTML = `↩️ [${VALID_COUNTRIES[id]}] 되돌리기 완료`;
+      }
+      
+      updateUndoButtonState();
+      checkValidity();
+    };
+
+    // 🎯 남은 국가 찾기
+    let highlightTimer = null;
+    document.getElementById("findNextBtn").onclick = (e) => {
+      e.stopPropagation();
+      const uncolored = allCountriesData.filter(d => !countryColors[d.id]);
+      if (uncolored.length === 0) {
+        document.getElementById("statusToast").innerHTML = "<span style='color:#4ade80;'>🎉 모든 국가를 다 칠했습니다!</span>";
+        return;
+      }
+
+      const target = uncolored[Math.floor(Math.random() * uncolored.length)];
+      if (!target.mapCentroid) return;
+
+      const [cx, cy] = target.mapCentroid;
+      const targetZoom = target.labelRank >= 3 ? 4.5 : 3.2;
+
+      const rect = document.getElementById("mapViewport").getBoundingClientRect();
+      const vx = rect.width / 2;
+      const vy = rect.height / 2;
+
+      const transform = d3.zoomIdentity
+        .translate(vx - cx * targetZoom, vy - cy * targetZoom)
+        .scale(targetZoom);
+
+      svg.transition().duration(600).call(zoomBehavior.transform, transform);
+
+      d3.selectAll("path.country").classed("highlighted", false);
+      const targetPath = d3.select(`#country-${target.id}`);
+      targetPath.classed("highlighted", true);
+
+      clearTimeout(highlightTimer);
+      highlightTimer = setTimeout(() => {
+        targetPath.classed("highlighted", false);
+      }, 2500);
+
+      document.getElementById("statusToast").innerHTML = 
+        `🎯 남은 국가: <b>${target.properties.name}</b>(으)로 이동했습니다!`;
+    };
+
+    function initPalette() {
+      const paletteListEl = document.getElementById('paletteList');
+      paletteListEl.innerHTML = '';
+      PALETTE_COLORS.forEach(c => {
+        const btn = document.createElement('div');
+        btn.className = 'color-btn' + (!isEraser && activeColor === c ? ' active' : '');
+        btn.style.backgroundColor = c;
+        btn.onclick = () => { activeColor = c; isEraser = false; initPalette(); };
+        paletteListEl.appendChild(btn);
+      });
+
+      const eraser = document.createElement('div');
+      eraser.className = 'eraser-btn' + (isEraser ? ' active' : '');
+      eraser.innerHTML = '✕';
+      eraser.onclick = () => { isEraser = true; initPalette(); };
+      paletteListEl.appendChild(eraser);
+    }
+    initPalette();
+
+    // 지도 데이터 로드
+    d3.json('https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json')
+      .then(worldData => {
+        const rawFeatures = topojson.feature(worldData, worldData.objects.countries).features;
+        const neighbors = topojson.neighbors(worldData.objects.countries.geometries);
+
+        const validIdSet = new Set(Object.keys(VALID_COUNTRIES).map(Number));
+        allCountriesData = rawFeatures.filter(f => validIdSet.has(+f.id));
+
+        const MAJOR_IDS = new Set([410, 156, 643, 840, 124, 76, 36, 356, 304, 32, 250, 724, 276, 392, 380, 826]);
+
+        labelOverlay.innerHTML = '';
+
+        rawFeatures.forEach((feat, i) => {
+          const id = +feat.id;
+          if (!validIdSet.has(id)) return;
+
+          feat.properties = feat.properties || {};
+          feat.properties.name = VALID_COUNTRIES[id];
+
+          if (CUSTOM_CENTROIDS[id]) {
+            feat.mapCentroid = projection(CUSTOM_CENTROIDS[id]);
+          } else {
+            const c = pathGenerator.centroid(feat);
+            feat.mapCentroid = (c && !isNaN(c[0])) ? c : null;
+          }
+
+          const bounds = pathGenerator.bounds(feat);
+          const dx = bounds[1][0] - bounds[0][0];
+          const dy = bounds[1][1] - bounds[0][1];
+          const approxSize = dx * dy;
+          feat.approxSize = approxSize;
+
+          if (MAJOR_IDS.has(id) || approxSize > 2000) {
+            feat.labelRank = 1;
+          } else if (approxSize > 400) {
+            feat.labelRank = 2;
+          } else {
+            feat.labelRank = 3;
+          }
+
+          adjacencyGraph[id] = neighbors[i]
+            .map(idx => +rawFeatures[idx].id)
+            .filter(nId => validIdSet.has(nId));
+
+          countryColors[id] = null;
+
+          if (feat.mapCentroid) {
+            const labelEl = document.createElement("div");
+            labelEl.className = "hud-label" + (feat.labelRank === 3 ? " micro" : "");
+            labelEl.textContent = feat.properties.name;
+            labelEl.style.display = "none";
+            labelOverlay.appendChild(labelEl);
+            feat.labelEl = labelEl;
+          }
+        });
+
+        allCountriesData.sort((a, b) => {
+          if (a.labelRank !== b.labelRank) return a.labelRank - b.labelRank;
+          return b.approxSize - a.approxSize;
+        });
+
+        const countriesLayer = d3.select("#countriesLayer");
+
+        countriesLayer.selectAll("path")
+          .data(allCountriesData)
+          .enter()
+          .append("path")
+          .attr("class", "country")
+          .attr("id", d => `country-${d.id}`)
+          .attr("d", pathGenerator)
+          .on("click", function(event, d) {
+            if (event.defaultPrevented) return;
+
+            const id = +d.id;
+            const newColor = isEraser ? null : activeColor;
+            const prevColor = countryColors[id];
+
+            if (prevColor !== newColor) {
+              historyStack.push({ type: "COLOR", id, prevColor, newColor });
+              updateUndoButtonState();
+            }
+
+            d3.select(this).classed("highlighted", false);
+            countryColors[id] = newColor;
+            d3.select(this).style("fill", countryColors[id] || "#e2e8f0");
+            checkValidity(d.properties.name);
+          });
+
+        const rect = document.getElementById("mapViewport").getBoundingClientRect();
+        const initialScale = Math.min(rect.width / width, rect.height / height) * 0.95;
+        const initialX = (rect.width - width * initialScale) / 2;
+        const initialY = (rect.height - height * initialScale) / 2;
+
+        initialCenteredTransform = d3.zoomIdentity.translate(initialX, initialY).scale(initialScale);
+        svg.call(zoomBehavior.transform, initialCenteredTransform);
+        updateLabels(initialCenteredTransform);
+
+        const overlay = document.getElementById("loadingOverlay");
+        overlay.style.opacity = '0';
+        setTimeout(() => overlay.style.display = 'none', 200);
+
+        checkValidity();
+      })
+      .catch(err => {
+        console.error(err);
+        document.getElementById("loadingOverlay").innerHTML = `<div style="color:#ef4444;">오류 발생. 새로고침 해주세요.</div>`;
+      });
+
+    // 충돌 검사
+    function checkValidity(touchedName = "") {
+      const conflicts = new Set();
+      let coloredCount = 0;
+      const usedColors = new Set();
+
+      for (const [idStr, nList] of Object.entries(adjacencyGraph)) {
+        const id = +idStr;
+        const c = countryColors[id];
+        if (c) {
+          coloredCount++;
+          usedColors.add(c);
+          nList.forEach(nId => {
+            if (countryColors[nId] && countryColors[nId] === c) {
+              conflicts.add(id);
+              conflicts.add(nId);
+            }
+          });
+        }
+      }
+
+      d3.selectAll("path.country")
+        .classed("conflict", d => conflicts.has(+d.id));
+
+      const total = allCountriesData.length;
+      document.getElementById("usedCount").textContent = `${usedColors.size}개`;
+      document.getElementById("coloredCount").textContent = `${coloredCount} / ${total}`;
+      document.getElementById("conflictCount").textContent = `${Math.floor(conflicts.size / 2)}건`;
+
+      const toast = document.getElementById("statusToast");
+      const actionDesc = touchedName ? `[${touchedName}] ${isEraser ? '지우기' : '칠하기'}` : '';
+
+      if (conflicts.size > 0) {
+        toast.innerHTML = `<span style="color:#f87171">⚠️ 국경 충돌! (${Math.floor(conflicts.size / 2)}곳)</span><br><small style="color:#94a3b8">${actionDesc}</small>`;
+      } else if (coloredCount === total && total > 0) {
+        if (usedColors.size <= 4) {
+          toast.innerHTML = `<span style="color:#4ade80">🎉 완벽합니다! 4개 이하 색으로 지구를 정복했습니다!</span>`;
+        } else {
+          toast.innerHTML = `<span style="color:#38bdf8">👏 완성! 이제 4색 이하에 도전해보세요!</span>`;
+        }
+      } else if (actionDesc) {
+        toast.innerHTML = `선택: <b>${actionDesc}</b><br><small style="color:#94a3b8">남은 국가: ${total - coloredCount}개</small>`;
+      }
+    }
+  </script>
+</body>
+</html>
