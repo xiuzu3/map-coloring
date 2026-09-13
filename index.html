@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>실제 세계지도 4색정리 - 완벽 수정판</title>
+  <title>실제 세계지도 4색정리 - 남은 국가 찾기 완벽 패치</title>
   <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
   <script src="https://cdn.jsdelivr.net/npm/topojson-client@3"></script>
   <style>
@@ -152,12 +152,12 @@
       stroke-dasharray: 4, 3;
     }
     @keyframes pulseGlow {
-      0% { fill: #facc15; stroke: #ffffff; stroke-width: 3px; }
-      50% { fill: #ca8a04; stroke: #facc15; stroke-width: 4px; }
-      100% { fill: #facc15; stroke: #ffffff; stroke-width: 3px; }
+      0% { fill: #facc15; stroke: #ffffff; stroke-width: 3.5px; }
+      50% { fill: #ea580c; stroke: #fde047; stroke-width: 4.5px; }
+      100% { fill: #facc15; stroke: #ffffff; stroke-width: 3.5px; }
     }
     path.country.highlighted {
-      animation: pulseGlow 0.6s infinite alternate;
+      animation: pulseGlow 0.55s infinite alternate !important;
     }
     .map-controls {
       position: absolute;
@@ -279,6 +279,8 @@
   </div>
 
   <script>
+    const STORAGE_KEY = "WORLD_MAP_COLORING_SAVE_V1";
+
     const VALID_COUNTRIES = {
       4: "아프가니스탄", 8: "알바니아", 12: "알제리", 24: "앙골라", 32: "아르헨티나",
       36: "호주", 40: "오스트리아", 31: "아제르바이잔", 50: "방글라데시", 56: "벨기에",
@@ -356,6 +358,18 @@
     const labelOverlay = document.getElementById("labelOverlay");
     let currentTransform = d3.zoomIdentity;
     let initialCenteredTransform = d3.zoomIdentity;
+
+    function saveToLocalStorage() {
+      try {
+        const toSave = {};
+        for (const [k, v] of Object.entries(countryColors)) {
+          if (v) toSave[k] = v;
+        }
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(toSave));
+      } catch (e) {
+        console.warn("자동 저장 실패:", e);
+      }
+    }
 
     function updateLabels(transform) {
       const k = transform.k;
@@ -465,6 +479,8 @@
         .style("fill", "#e2e8f0")
         .classed("conflict", false)
         .classed("highlighted", false);
+      
+      saveToLocalStorage();
       checkValidity();
       document.getElementById("statusToast").innerHTML = `🗑️ 색칠이 초기화되었습니다! (실수했다면 ↩로 복구 가능)`;
     };
@@ -479,31 +495,44 @@
       const lastAction = historyStack.pop();
       if (lastAction.type === "CLEAR_ALL") {
         for (const [id, color] of Object.entries(lastAction.prevSnapshot)) {
-          countryColors[id] = color;
+          countryColors[+id] = color;
           d3.select(`#country-${id}`).style("fill", color);
         }
         document.getElementById("statusToast").innerHTML = `↩️ 초기화 전 상태로 복구했습니다!`;
       } else {
-        const id = lastAction.id;
+        const id = +lastAction.id;
         countryColors[id] = lastAction.prevColor;
         d3.select(`#country-${id}`).style("fill", countryColors[id] || "#e2e8f0");
         document.getElementById("statusToast").innerHTML = `↩️ [${VALID_COUNTRIES[id]}] 되돌리기 완료`;
       }
       updateUndoButtonState();
+      saveToLocalStorage();
       checkValidity();
     };
 
-    // 🎯 남은 국가 찾기
+    // ==========================================================
+    // 🎯 [핵심 보완] 남은 국가 찾기 (ID 타입 엄격 일치 + 완벽 필터링)
+    // ==========================================================
     let highlightTimer = null;
     document.getElementById("findNextBtn").onclick = (e) => {
       e.stopPropagation();
-      const uncolored = allCountriesData.filter(d => !countryColors[d.id]);
+
+      // ★ 정확하게 현재 색이 없는(null, undefined, '') 국가만 엄격하게 선별
+      const uncolored = allCountriesData.filter(d => {
+        const cid = Number(d.id);
+        const col = countryColors[cid];
+        return !col || col === "" || col === "null";
+      });
+
       if (uncolored.length === 0) {
-        document.getElementById("statusToast").innerHTML = "<span style='color:#4ade80;'>🎉 모든 국가를 다 칠했습니다!</span>";
+        document.getElementById("statusToast").innerHTML = "<span style='color:#4ade80; font-weight:bold;'>🎉 모든 국가를 다 칠했습니다!</span>";
         return;
       }
+
+      // 무작위로 안 칠해진 국가 1개 추출
       const target = uncolored[Math.floor(Math.random() * uncolored.length)];
       if (!target.mapCentroid) return;
+
       const [cx, cy] = target.mapCentroid;
       const targetZoom = target.labelRank >= 3 ? 4.5 : 3.2;
       const rect = document.getElementById("mapViewport").getBoundingClientRect();
@@ -513,18 +542,26 @@
         .translate(vx - cx * targetZoom, vy - cy * targetZoom)
         .scale(targetZoom);
 
-      svg.transition().duration(600).call(zoomBehavior.transform, transform);
+      // 목표 위치로 부드럽게 줌 이동
+      svg.transition().duration(550).call(zoomBehavior.transform, transform);
 
+      // 기존 강조 효과 제거 후 대상 국가에 펄스 강조
       d3.selectAll("path.country").classed("highlighted", false);
       const targetPath = d3.select(`#country-${target.id}`);
       targetPath.classed("highlighted", true);
+
+      // 라벨이 숨겨져 있을 수 있으므로 임시 강제 표시
+      if (target.labelEl) {
+        target.labelEl.style.display = "block";
+      }
+
       clearTimeout(highlightTimer);
       highlightTimer = setTimeout(() => {
         targetPath.classed("highlighted", false);
-      }, 2500);
+      }, 3000);
 
       document.getElementById("statusToast").innerHTML =
-        `🎯 남은 국가: <b>${target.properties.name}</b>(으)로 이동했습니다!`;
+        `🎯 남은 국가: <b style="color:#fde047; font-size: 0.85rem;">${target.properties.name}</b>(으)로 이동! (남은 국가: ${uncolored.length}개)`;
     };
 
     function initPalette() {
@@ -552,13 +589,13 @@
         const neighbors = topojson.neighbors(worldData.objects.countries.geometries);
         const validIdSet = new Set(Object.keys(VALID_COUNTRIES).map(Number));
 
-        allCountriesData = rawFeatures.filter(f => validIdSet.has(+f.id));
+        allCountriesData = rawFeatures.filter(f => validIdSet.has(Number(f.id)));
         const MAJOR_IDS = new Set([410, 156, 643, 840, 124, 76, 36, 356, 304, 32, 250, 724, 276, 392, 380, 826]);
 
         labelOverlay.innerHTML = '';
 
         rawFeatures.forEach((feat, i) => {
-          const id = +feat.id;
+          const id = Number(feat.id);
           if (!validIdSet.has(id)) return;
 
           feat.properties = feat.properties || {};
@@ -585,9 +622,8 @@
             feat.labelRank = 3;
           }
 
-          // ★ [핵심 버그 수정 1]: 자기 자신(nId === id)을 이웃 목록에서 완전히 제외하고 중복 제거
           const rawNeighborList = neighbors[i]
-            .map(idx => +rawFeatures[idx].id)
+            .map(idx => Number(rawFeatures[idx].id))
             .filter(nId => validIdSet.has(nId) && nId !== id);
           
           adjacencyGraph[id] = Array.from(new Set(rawNeighborList));
@@ -608,6 +644,24 @@
           return b.approxSize - a.approxSize;
         });
 
+        // 💾 저장된 데이터 복원
+        let restoredCount = 0;
+        try {
+          const savedData = localStorage.getItem(STORAGE_KEY);
+          if (savedData) {
+            const parsed = JSON.parse(savedData);
+            for (const [idStr, col] of Object.entries(parsed)) {
+              const id = Number(idStr);
+              if (validIdSet.has(id) && col) {
+                countryColors[id] = col;
+                restoredCount++;
+              }
+            }
+          }
+        } catch (e) {
+          console.warn("저장 데이터 복원 실패:", e);
+        }
+
         const countriesLayer = d3.select("#countriesLayer");
         countriesLayer.selectAll("path")
           .data(allCountriesData)
@@ -616,9 +670,10 @@
           .attr("class", "country")
           .attr("id", d => `country-${d.id}`)
           .attr("d", pathGenerator)
+          .style("fill", d => countryColors[Number(d.id)] || "#e2e8f0")
           .on("click", function(event, d) {
             if (event.defaultPrevented) return;
-            const id = +d.id;
+            const id = Number(d.id);
             const newColor = isEraser ? null : activeColor;
             const prevColor = countryColors[id];
 
@@ -630,6 +685,7 @@
             d3.select(this).classed("highlighted", false);
             countryColors[id] = newColor;
             d3.select(this).style("fill", countryColors[id] || "#e2e8f0");
+            saveToLocalStorage();
             checkValidity(d.properties.name);
           });
 
@@ -647,36 +703,40 @@
         setTimeout(() => overlay.style.display = 'none', 200);
 
         checkValidity();
+
+        if (restoredCount > 0) {
+          document.getElementById("statusToast").innerHTML = `📂 이전 작업 내용(${restoredCount}개 국가)을 자동으로 불러왔습니다.`;
+        }
       })
       .catch(err => {
         console.error(err);
         document.getElementById("loadingOverlay").innerHTML = `<div style="color:#ef4444;">오류 발생. 새로고침 해주세요.</div>`;
       });
 
-    // ★ [핵심 버그 수정 2]: 충돌 검사 로직
+    // 충돌 검사
     function checkValidity(touchedName = "") {
       const conflicts = new Set();
       let coloredCount = 0;
       const usedColors = new Set();
 
       for (const [idStr, nList] of Object.entries(adjacencyGraph)) {
-        const id = +idStr;
+        const id = Number(idStr);
         const c = countryColors[id];
         if (c) {
           coloredCount++;
           usedColors.add(c);
           nList.forEach(nId => {
-            // 오직 다른 국가이면서(nId !== id) 색상이 같을 때만 충돌 판정
-            if (nId !== id && countryColors[nId] && countryColors[nId] === c) {
+            const neighborColor = countryColors[Number(nId)];
+            if (nId !== id && neighborColor && neighborColor === c) {
               conflicts.add(id);
-              conflicts.add(nId);
+              conflicts.add(Number(nId));
             }
           });
         }
       }
 
       d3.selectAll("path.country")
-        .classed("conflict", d => conflicts.has(+d.id));
+        .classed("conflict", d => conflicts.has(Number(d.id)));
 
       const total = allCountriesData.length;
       document.getElementById("usedCount").textContent = `${usedColors.size}개`;
